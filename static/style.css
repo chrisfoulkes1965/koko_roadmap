@@ -1,0 +1,47 @@
+
+:root { --bg:#fafafa; --txt:#222; --muted:#666; --card:#fff; --b:#ddd; --link:#0645ad; }
+*{box-sizing:border-box} body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;background:var(--bg);color:var(--txt)}
+header{background:#fff;border-bottom:1px solid var(--b);position:sticky;top:0;z-index:10}
+header .wrap{display:flex;gap:.75rem;align-items:center;max-width:1200px;margin:0 auto;padding:.8rem 1rem;flex-wrap:wrap}
+header a{color:var(--link);text-decoration:none}
+main{max-width:1200px;margin:0 auto;padding:1rem}
+table{width:100%;border-collapse:collapse;background:var(--card)}
+th,td{border:1px solid var(--b);padding:.5rem;vertical-align:top}
+th{background:#f4f4f4;text-align:left}
+.small{font-size:.9rem;color:var(--muted)}
+.badge{display:inline-block;border:1px solid var(--b);border-radius:999px;padding:.1rem .5rem;background:#f8f8f8;margin-right:.25rem;margin-bottom: .5em; }
+.flex{display:flex;gap:.5rem;align-items:center}
+.right{margin-left:auto}
+.btn{padding:.35rem .7rem;border:1px solid var(--b);background:#fff;border-radius:6px;cursor:pointer;border-color:#1a7; background:#1a7; color:#fff}
+.btn.danger{border-color:#b00; color:#b00; background:#fff}
+a.btn, a.btn:visited { text-decoration: none; display: inline-block; }
+a.btn:hover { text-decoration: none; }
+input:not([type="checkbox"]):not([type="radio"]),select,textarea{
+    padding:.35rem .45rem;border:1px solid var(--b);border-radius:6px;width:100%;
+}
+input[type="checkbox"],
+input[type="radio"]{
+  width:auto;
+  padding:0;
+  border:0;
+  vertical-align:middle;
+}
+
+textarea{min-height:100px}
+.row-actions{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap}
+.tree{background:#fff;border:1px solid var(--b);border-radius:8px;padding:.75rem}
+.tree .area{padding:.4rem .5rem;border:1px solid var(--b);border-radius:6px;margin:.4rem 0;background:#fcfcfc}
+.tree .subs{margin:.3rem 0 .5rem 1rem}
+.modal.hidden{display:none}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;padding:1rem;z-index:1000}
+.modal .content{background:#fff;border:1px solid var(--b);border-radius:10px;max-width:640px;width:100%;padding:1rem}
+.modal .content h3{margin:.2rem 0 .6rem}
+.modal .actions{display:flex;gap:.5rem;justify-content:flex-end;margin-top:.75rem}
+.kv{display:grid;grid-template-columns:160px 1fr;gap:.5rem .75rem}
+.chart-wrap{border:1px solid var(--b);background:#fff;border-radius:8px;padding:.5rem}
+
+/* Manage Resources modal: tidy checkbox list */
+  #capResBody form { margin-top: .25rem; }
+  #capResBody form > div { margin: .35rem 0; }
+  #capResBody label { display: inline-flex; align-items: center; gap: .5rem; line-height: 1.3; }
+  #capResBody input[type="checkbox"] { margin: 0; }

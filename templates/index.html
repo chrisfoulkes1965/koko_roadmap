@@ -1,0 +1,22 @@
+
+{% extends "base.html" %}
+{% block content %}
+<h2>Welcome</h2>
+
+<h3>Changelog (from Excel &rarr; <code>changelog</code> sheet)</h3>
+{% if changelog and changelog|length %}
+  {% set cols = changelog[0].keys() %}
+  <div class="small muted" style="margin:.25rem 0 .5rem 0;">Newest first.</div>
+  <table class="table">
+    <thead><tr>{% for c in cols %}<th>{{ c }}</th>{% endfor %}</tr></thead>
+    <tbody>
+      {% for r in changelog %}
+      <tr>{% for c in cols %}<td>{{ r[c] }}</td>{% endfor %}</tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <p class="muted">No entries yet.</p>
+{% endif %}
+
+{% endblock %}

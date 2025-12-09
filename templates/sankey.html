@@ -1,0 +1,1076 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Sankey</h2>
+<p class="small">
+  Flow: Hierarchical <strong>Goals</strong> with parent/child relationships.
+  Ordered by: Goals by due date; filtered by tags.
+</p>
+
+<div class="row-actions" style="margin:.5rem 0 .25rem 0; display:flex; gap:.5rem; flex-wrap:wrap;">
+  <button class="btn" data-open="goals">Filter Goals</button>
+  <button class="btn" data-open="tags">Filter Tags</button>
+  <button class="btn" id="clearAll">Clear all</button>
+</div>
+
+<!-- Selected badges -->
+<div id="badges" style="display:flex; gap:.375rem; flex-wrap:wrap; margin:.25rem 0 .5rem 0;"></div>
+
+<style>
+  /* Enable clicks on Sankey elements */
+  #chart svg * { pointer-events: all !important; }
+  #chart svg text { cursor: pointer; }
+  #chart svg .sankey-node { cursor: pointer; }
+  #chart svg rect { cursor: pointer; }
+  /* Style for click overlay buttons */
+  .node-click-btn {
+    position: absolute;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    z-index: 100;
+  }
+  .node-click-btn:hover {
+    background: rgba(0,100,200,0.1);
+  }
+</style>
+<div class="chart-wrap" style="position:relative;">
+  <div id="chart" style="width:100%; height: {{ height }}px;"></div>
+  <div id="clickOverlay" style="position:absolute; top:0; left:0; right:0; bottom:0; pointer-events:none;"></div>
+</div>
+
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+
+<!-- Reusable Modal -->
+<div class="modal hidden" id="filterModal">
+  <div class="content" style="max-width:720px;">
+    <h3 id="filterTitle">Select</h3>
+    <div id="filterList" style="max-height:50vh; overflow:auto; padding:.25rem 0;"></div>
+    <div class="actions">
+      <button class="btn" id="m_cancel" type="button">Cancel</button>
+      <button class="btn" id="m_clear" type="button">Clear</button>
+      <button class="btn primary" id="m_apply" type="button">Apply</button>
+    </div>
+  </div>
+</div>
+
+<!-- Goal Actions Modal -->
+<div class="modal hidden" id="linkModal">
+  <div class="content" style="max-width:480px;">
+    <h3 id="linkTitle" style="margin-bottom:.25rem;">Goal Name</h3>
+    
+    <!-- Goal Details -->
+    <div style="background:#f5f5f5; border-radius:6px; padding:.75rem; margin-bottom:1rem;">
+      <div style="display:grid; grid-template-columns: 80px 1fr; gap:.25rem .5rem; font-size:.9em;">
+        <span style="color:#666;">Due:</span>
+        <span id="goalDueDisplay">-</span>
+        <span style="color:#666;">Parents:</span>
+        <span id="goalParentsDisplay">None</span>
+        <span style="color:#666;">Children:</span>
+        <span id="goalChildrenDisplay">None</span>
+      </div>
+    </div>
+    
+    <!-- Action Buttons -->
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:.5rem;">
+      <a class="btn" id="btnEditGoal" href="#" style="text-align:center; text-decoration:none;">✏️ Edit</a>
+      <button class="btn" id="btnAddParent" type="button" style="background:#1976d2;">+ Add Parent</button>
+      <a class="btn" id="btnManageParents" href="#" style="text-align:center; text-decoration:none;">👆 Manage Parents</a>
+      <button class="btn" id="btnAddChild" type="button" style="background:#1976d2;">+ Add Child</button>
+      <a class="btn" id="btnManageChildren" href="#" style="text-align:center; text-decoration:none;">👇 Manage Children</a>
+    </div>
+    
+    <div class="actions" style="margin-top:1rem;">
+      <button class="btn" id="link_cancel" type="button">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Create & Link Goal Modal -->
+<div class="modal hidden" id="createGoalModal">
+  <div class="content" style="max-width:480px;">
+    <h3 id="createGoalTitle">Create New Parent</h3>
+    <p id="createGoalSubtitle" style="color:#666; margin:-.25rem 0 .75rem 0; font-size:.9em;"></p>
+    
+    <label style="font-weight:500; display:block; margin-bottom:.25rem;">Goal Name *</label>
+    <input type="text" id="newGoalName" placeholder="Enter goal name..." style="width:100%; padding:.5rem; margin-bottom:.75rem;">
+    
+    <label style="font-weight:500; display:block; margin-bottom:.25rem;">Due Date</label>
+    <input type="date" id="newGoalDue" style="width:100%; padding:.5rem; margin-bottom:.75rem;">
+    
+    <label style="font-weight:500; display:block; margin-bottom:.25rem;">Description</label>
+    <textarea id="newGoalDesc" placeholder="Optional description..." style="width:100%; padding:.5rem; margin-bottom:.75rem; min-height:60px;"></textarea>
+    
+    <button class="btn" id="createGoalBtn" type="button" style="width:100%; background:#1976d2;">Create & Link Goal</button>
+    
+    <div class="actions" style="margin-top:1rem;">
+      <button class="btn" id="createGoal_cancel" type="button">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast notification -->
+<div id="toast" style="position:fixed; bottom:1rem; right:1rem; background:#333; color:#fff; padding:.75rem 1.25rem; border-radius:6px; opacity:0; transition:opacity .3s; pointer-events:none; z-index:1001;"></div>
+
+<script>
+console.log('Sankey script loading...');
+const DATA = {{ data|tojson }};
+const CH = document.getElementById('chart');
+const badges = document.getElementById('badges');
+console.log('DATA loaded:', DATA.goals?.length, 'goals,', DATA.edges?.length, 'edges');
+
+// ---------- utilities ----------
+const iso = s => (s && /^\d{4}-\d{2}-\d{2}$/.test(String(s))) ? String(s) : '';
+const dateOrMax = s => {
+  const x = iso(s);
+  if (!x) return Number.MAX_SAFE_INTEGER;
+  const d = new Date(x + 'T00:00:00Z');
+  return d.getTime();
+};
+
+// lookup tables
+const GOALS = DATA.goals || [];
+const EDGES = DATA.edges || [];
+const TAGS = DATA.tags || [];
+
+// map helpers
+const goalById = new Map(GOALS.map(x=>[x.id,x]));
+
+// Build parent/child relationships
+const childrenByParent = new Map();
+const parentByChild = new Map();
+EDGES.forEach(e => {
+  if (!childrenByParent.has(e.parent)) {
+    childrenByParent.set(e.parent, []);
+  }
+  childrenByParent.get(e.parent).push(e.child);
+  parentByChild.set(e.child, e.parent);
+});
+
+// Build hierarchy levels
+function buildLevels() {
+  const levels = [];
+  const processed = new Set();
+  
+  // Find root nodes (nodes without parents)
+  const roots = GOALS.filter(g => !parentByChild.has(g.id)).map(g => g.id);
+  
+  function addToLevel(nodeId, level) {
+    if (processed.has(nodeId)) return;
+    processed.add(nodeId);
+    
+    while (levels.length <= level) {
+      levels.push([]);
+    }
+    levels[level].push(nodeId);
+    
+    // Add children to next level
+    const children = childrenByParent.get(nodeId) || [];
+    children.forEach(childId => {
+      addToLevel(childId, level + 1);
+    });
+  }
+  
+  roots.forEach(rootId => addToLevel(rootId, 0));
+  
+  // Handle any orphaned nodes (nodes with parents not in the graph)
+  GOALS.forEach(g => {
+    if (!processed.has(g.id)) {
+      addToLevel(g.id, 0);
+    }
+  });
+  
+  return levels;
+}
+
+// Order goals by due date
+const goalOrder = GOALS.slice().sort((a,b)=>{
+  const d = dateOrMax(a.due) - dateOrMax(b.due);
+  return d !== 0 ? d : String(a.name||'').localeCompare(b.name||'');
+}).map(x=>x.id);
+
+// selections
+const sel = {
+  goals: new Set(),
+  tags: new Set()
+};
+
+// ---------- filter modal ----------
+const modal = document.getElementById('filterModal');
+const mTitle= document.getElementById('filterTitle');
+const mList = document.getElementById('filterList');
+const mCancel = document.getElementById('m_cancel');
+const mClear  = document.getElementById('m_clear');
+const mApply  = document.getElementById('m_apply');
+let currentKey = null;
+
+const LABELS = {
+  goals: 'Goals',
+  tags: 'Tags'
+};
+
+const SOURCE_FOR = {
+  goals: GOALS.map(x=>({id:x.id, label:x.name})),
+  tags: TAGS.map(tag=>({id:tag, label:tag}))
+};
+
+function openModal(key){
+  currentKey = key;
+  mTitle.textContent = 'Select ' + LABELS[key];
+  const selected = sel[key];
+  const rows = SOURCE_FOR[key].slice().sort((a,b)=>String(a.label||'').localeCompare(b.label||''));
+  mList.innerHTML = rows.map(r => {
+    const checked = selected.has(r.id) ? 'checked' : '';
+    return `<label style="display:block; padding:.25rem 0;">
+      <input type="checkbox" value="${r.id}" ${checked}> ${r.label}
+    </label>`;
+  }).join('') || '<div class="muted">No items.</div>';
+  modal.classList.remove('hidden');
+}
+function closeModal(){ modal.classList.add('hidden'); }
+mCancel.addEventListener('click', closeModal);
+modal.addEventListener('click', (e)=>{ if(e.target===modal) closeModal(); });
+mClear.addEventListener('click', ()=>{
+  if (!currentKey) return;
+  sel[currentKey].clear();
+  closeModal();
+  render();
+});
+mApply.addEventListener('click', ()=>{
+  if (!currentKey) return;
+  const chosen = new Set([...mList.querySelectorAll('input[type="checkbox"]:checked')].map(i=>{
+    const val = i.value;
+    // For tags, use the value as-is; for goals, parse as int
+    return currentKey === 'tags' ? val : parseInt(val,10);
+  }));
+  sel[currentKey] = chosen;
+  closeModal();
+  render();
+});
+
+document.querySelectorAll('[data-open]').forEach(b=>{
+  b.addEventListener('click', ()=> openModal(b.getAttribute('data-open')));
+});
+
+document.getElementById('clearAll').addEventListener('click', ()=>{
+  for (const k of Object.keys(sel)) sel[k].clear();
+  render();
+});
+
+// ---------- filtering + graph building ----------
+function renderBadges(){
+  const pill = (txt, onClick) => {
+    const span = document.createElement('span');
+    span.className = 'badge';
+    span.style.cursor = 'pointer';
+    span.title = 'Remove';
+    span.textContent = txt + ' ✕';
+    span.addEventListener('click', onClick);
+    return span;
+  };
+  badges.innerHTML = '';
+  for (const [k,setRef] of Object.entries(sel)) {
+    if (!setRef.size) continue;
+    const names = [...setRef].map(id=>{
+      const src = SOURCE_FOR[k].find(r=>r.id===id);
+      return src ? src.label : String(id);
+    });
+    const s = document.createElement('span');
+    s.appendChild(pill(`${LABELS[k]}: ${names.join(', ')}`, ()=>{
+      setRef.clear(); render();
+    }));
+    badges.appendChild(s);
+  }
+}
+
+function parseTags(tagsStr) {
+  if (!tagsStr || typeof tagsStr !== 'string') return [];
+  return tagsStr.split(',').map(t => t.trim()).filter(t => t.length > 0);
+}
+
+function render(){
+  renderBadges();
+
+  // Start with "allowed" sets (empty selection => all)
+  let allowedGoals = new Set(sel.goals && sel.goals.size ? sel.goals : GOALS.map(x=>x.id));
+
+  // Tag filtering
+  if (sel.tags.size > 0) {
+    allowedGoals = new Set([...allowedGoals].filter(id => {
+      const goal = goalById.get(id);
+      if (!goal) return false;
+      const goalTags = parseTags(goal.tags);
+      return goalTags.some(tag => sel.tags.has(tag));
+    }));
+  }
+
+  // Filter edges to only include allowed goals
+  const allowedEdges = EDGES.filter(e => 
+    allowedGoals.has(e.parent) && allowedGoals.has(e.child)
+  );
+
+  // Build filtered hierarchy
+  const filteredChildrenByParent = new Map();
+  const filteredParentByChild = new Map();
+  allowedEdges.forEach(e => {
+    if (!filteredChildrenByParent.has(e.parent)) {
+      filteredChildrenByParent.set(e.parent, []);
+    }
+    filteredChildrenByParent.get(e.parent).push(e.child);
+    filteredParentByChild.set(e.child, e.parent);
+  });
+
+  // Build levels from filtered graph
+  function buildFilteredLevels() {
+    const levels = [];
+    const processed = new Set();
+    
+    // Find root nodes (nodes without parents in filtered graph)
+    const roots = [...allowedGoals].filter(id => !filteredParentByChild.has(id));
+    
+    function addToLevel(nodeId, level) {
+      if (processed.has(nodeId)) return;
+      processed.add(nodeId);
+      
+      while (levels.length <= level) {
+        levels.push([]);
+      }
+      levels[level].push(nodeId);
+      
+      // Add children to next level
+      const children = filteredChildrenByParent.get(nodeId) || [];
+      children.forEach(childId => {
+        if (allowedGoals.has(childId)) {
+          addToLevel(childId, level + 1);
+        }
+      });
+    }
+    
+    roots.forEach(rootId => addToLevel(rootId, 0));
+    
+    // Handle any orphaned nodes
+    allowedGoals.forEach(id => {
+      if (!processed.has(id)) {
+        addToLevel(id, 0);
+      }
+    });
+    
+    return levels;
+  }
+
+  const levels = buildFilteredLevels();
+  
+  // Minimize crossings using median heuristic with multiple passes
+  function minimizeCrossings(levels, edges) {
+    const numLevels = levels.length;
+    if (numLevels < 2) return levels;
+    
+    // Build connection maps for ALL edges (not just adjacent levels)
+    const forwardConnections = new Map(); // node -> array of {node, level}
+    const backwardConnections = new Map(); // node -> array of {node, level}
+    
+    // First, build level lookup
+    const nodeLevel = new Map();
+    levels.forEach((level, idx) => {
+      level.forEach(nodeId => nodeLevel.set(nodeId, idx));
+    });
+    
+    edges.forEach(e => {
+      const parentLevel = nodeLevel.get(e.parent);
+      const childLevel = nodeLevel.get(e.child);
+      
+      if (parentLevel == null || childLevel == null) return;
+      
+      if (!forwardConnections.has(e.parent)) {
+        forwardConnections.set(e.parent, []);
+      }
+      forwardConnections.get(e.parent).push({ node: e.child, level: childLevel });
+      
+      if (!backwardConnections.has(e.child)) {
+        backwardConnections.set(e.child, []);
+      }
+      backwardConnections.get(e.child).push({ node: e.parent, level: parentLevel });
+    });
+    
+    // Create a copy to avoid mutating the original
+    let currentLevels = levels.map(level => level.slice());
+    
+    // Helper: get median position of connected nodes
+    function getMedian(nodeId, connections, targetLevelIdx, currentLevels) {
+      const conns = connections.get(nodeId) || [];
+      const positions = [];
+      
+      conns.forEach(conn => {
+        const level = currentLevels[conn.level];
+        if (level) {
+          const pos = level.indexOf(conn.node);
+          if (pos !== -1) {
+            // Weight by distance - closer levels have more influence
+            const distance = Math.abs(conn.level - targetLevelIdx);
+            const weight = 1 / (distance || 1);
+            positions.push({ pos, weight });
+          }
+        }
+      });
+      
+      if (positions.length === 0) return null;
+      
+      // Calculate weighted median
+      positions.sort((a, b) => a.pos - b.pos);
+      const totalWeight = positions.reduce((sum, p) => sum + p.weight, 0);
+      let cumWeight = 0;
+      for (const p of positions) {
+        cumWeight += p.weight;
+        if (cumWeight >= totalWeight / 2) {
+          return p.pos;
+        }
+      }
+      return positions[Math.floor(positions.length / 2)].pos;
+    }
+    
+    // Count crossings between two adjacent levels
+    function countCrossings(level1, level2, edges) {
+      let crossings = 0;
+      const relevantEdges = edges.filter(e => {
+        const pLevel = nodeLevel.get(e.parent);
+        const cLevel = nodeLevel.get(e.child);
+        return (pLevel != null && cLevel != null);
+      });
+      
+      // Check all pairs of edges
+      for (let i = 0; i < relevantEdges.length; i++) {
+        for (let j = i + 1; j < relevantEdges.length; j++) {
+          const e1 = relevantEdges[i];
+          const e2 = relevantEdges[j];
+          
+          const p1Level = nodeLevel.get(e1.parent);
+          const c1Level = nodeLevel.get(e1.child);
+          const p2Level = nodeLevel.get(e2.parent);
+          const c2Level = nodeLevel.get(e2.child);
+          
+          // Check if edges could potentially cross
+          if (p1Level === p2Level && c1Level === c2Level) {
+            const level1Arr = currentLevels[p1Level];
+            const level2Arr = currentLevels[c1Level];
+            
+            const p1Pos = level1Arr.indexOf(e1.parent);
+            const p2Pos = level1Arr.indexOf(e2.parent);
+            const c1Pos = level2Arr.indexOf(e1.child);
+            const c2Pos = level2Arr.indexOf(e2.child);
+            
+            // Crossing occurs when order flips
+            if ((p1Pos < p2Pos && c1Pos > c2Pos) || (p1Pos > p2Pos && c1Pos < c2Pos)) {
+              crossings++;
+            }
+          }
+        }
+      }
+      return crossings;
+    }
+    
+    // Run multiple iterations with both forward and backward passes
+    const maxIterations = 10;
+    let bestLevels = currentLevels.map(l => l.slice());
+    let bestCrossings = countCrossings(null, null, edges);
+    
+    for (let iter = 0; iter < maxIterations; iter++) {
+      // Forward pass: order each level based on connections to ALL other levels
+      for (let levelIdx = 1; levelIdx < numLevels; levelIdx++) {
+        const level = currentLevels[levelIdx];
+        const medians = new Map();
+        
+        level.forEach(nodeId => {
+          const median = getMedian(nodeId, backwardConnections, levelIdx, currentLevels);
+          medians.set(nodeId, median);
+        });
+        
+        const sorted = level.slice().sort((a, b) => {
+          const aMedian = medians.get(a);
+          const bMedian = medians.get(b);
+          
+          if (aMedian == null && bMedian == null) return 0;
+          if (aMedian == null) return 1;
+          if (bMedian == null) return -1;
+          return aMedian - bMedian;
+        });
+        currentLevels[levelIdx] = sorted;
+      }
+      
+      // Backward pass: order each level based on connections to ALL other levels
+      for (let levelIdx = numLevels - 2; levelIdx >= 0; levelIdx--) {
+        const level = currentLevels[levelIdx];
+        const medians = new Map();
+        
+        level.forEach(nodeId => {
+          const median = getMedian(nodeId, forwardConnections, levelIdx, currentLevels);
+          medians.set(nodeId, median);
+        });
+        
+        const sorted = level.slice().sort((a, b) => {
+          const aMedian = medians.get(a);
+          const bMedian = medians.get(b);
+          
+          if (aMedian == null && bMedian == null) return 0;
+          if (aMedian == null) return 1;
+          if (bMedian == null) return -1;
+          return aMedian - bMedian;
+        });
+        currentLevels[levelIdx] = sorted;
+      }
+      
+      // Track best solution
+      const crossings = countCrossings(null, null, edges);
+      if (crossings < bestCrossings) {
+        bestCrossings = crossings;
+        bestLevels = currentLevels.map(l => l.slice());
+      }
+      
+      // Early exit if no crossings
+      if (crossings === 0) break;
+    }
+    
+    return bestLevels;
+  }
+  
+  // Apply crossing minimization (start with levels as-is, let algorithm optimize)
+  let sortedLevels = minimizeCrossings(levels, allowedEdges);
+
+  // Build Sankey diagram
+  const labels = [];
+  const xs = [], ys = [];
+  const idx = new Map();
+
+  function pushNodes(list, levelIdx) {
+    const n = list.length || 1;
+    list.forEach((id, i) => {
+      const goal = goalById.get(id);
+      if (!goal) return;
+      idx.set(`${levelIdx}:${id}`, labels.length);
+      labels.push(goal.name || '');
+      const xPos = levelIdx / Math.max(sortedLevels.length - 1, 1);
+      xs.push(xPos);
+      ys.push((i+1)/(n+1));
+    });
+    if (list.length === 0) {
+      // Place an invisible placeholder to keep columns stable
+      idx.set(`${levelIdx}:__empty__`, labels.length);
+      labels.push('');
+      const xPos = levelIdx / Math.max(sortedLevels.length - 1, 1);
+      xs.push(xPos);
+      ys.push(0.5);
+    }
+  }
+
+  // Add nodes for each level
+  sortedLevels.forEach((level, levelIdx) => {
+    pushNodes(level, levelIdx);
+  });
+
+  // Build links and calculate flow values
+  const src = [], tgt = [], val = [];
+  const linkMap = new Map(); // Map from edge key to link index
+  
+  // First pass: build all links and map edges to link indices
+  allowedEdges.forEach(e => {
+    if (!allowedGoals.has(e.parent) || !allowedGoals.has(e.child)) return;
+    
+    // Find which level each node is in
+    let parentLevel = -1, childLevel = -1;
+    sortedLevels.forEach((level, idx) => {
+      if (level.includes(e.parent)) parentLevel = idx;
+      if (level.includes(e.child)) childLevel = idx;
+    });
+    
+    if (parentLevel === -1 || childLevel === -1) return;
+    
+    const s = idx.get(`${parentLevel}:${e.parent}`);
+    const t = idx.get(`${childLevel}:${e.child}`);
+    
+    if (s != null && t != null) {
+      const linkIdx = src.length;
+      src.push(s);
+      tgt.push(t);
+      val.push(0); // Will be calculated below
+      linkMap.set(`${e.parent}:${e.child}`, linkIdx);
+    }
+  });
+
+  // Calculate flow values to ensure conservation at each node
+  // Flow = sum of inputs = sum of outputs at each node
+  
+  // Build maps for flow calculation
+  const nodeFlow = new Map(); // Total flow through each node
+  const incomingLinks = new Map(); // Links coming into each node
+  const outgoingLinks = new Map(); // Links going out of each node
+  
+  // Initialize maps
+  allowedGoals.forEach(id => {
+    incomingLinks.set(id, []);
+    outgoingLinks.set(id, []);
+    nodeFlow.set(id, 0);
+  });
+  
+  // Build link structure
+  allowedEdges.forEach(e => {
+    if (!allowedGoals.has(e.parent) || !allowedGoals.has(e.child)) return;
+    const linkKey = `${e.parent}:${e.child}`;
+    const linkIdx = linkMap.get(linkKey);
+    if (linkIdx == null) return;
+    
+    incomingLinks.get(e.child).push({ parent: e.parent, linkIdx });
+    outgoingLinks.get(e.parent).push({ child: e.child, linkIdx });
+  });
+  
+  // Calculate flows level by level to ensure parents are processed before children
+  sortedLevels.forEach((level, levelIdx) => {
+    level.forEach(nodeId => {
+      const incoming = incomingLinks.get(nodeId) || [];
+      const outgoing = outgoingLinks.get(nodeId) || [];
+      
+      // Calculate total incoming flow
+      let totalIncoming = 0;
+      if (incoming.length === 0) {
+        // Root node: assign base flow of 1
+        totalIncoming = 1;
+      } else {
+        // Sum flows from all parents (parents are in earlier levels, so already calculated)
+        incoming.forEach(link => {
+          totalIncoming += val[link.linkIdx];
+        });
+      }
+      
+      // Set node flow
+      nodeFlow.set(nodeId, totalIncoming);
+      
+      // Distribute flow equally among children
+      if (outgoing.length > 0) {
+        const flowPerChild = totalIncoming / outgoing.length;
+        outgoing.forEach(link => {
+          val[link.linkIdx] = flowPerChild;
+        });
+      }
+    });
+  });
+
+  // Build customdata array with goal IDs for click handling
+  const nodeCustomData = [];
+  sortedLevels.forEach((level) => {
+    level.forEach((id) => {
+      const goal = goalById.get(id);
+      if (goal) {
+        nodeCustomData.push(id); // Store goal ID
+      }
+    });
+    if (level.length === 0) {
+      nodeCustomData.push(null); // Placeholder
+    }
+  });
+
+  const trace = [{
+    type:'sankey',
+    arrangement:'snap',
+    node:{ label:labels, pad:20, thickness:20, x:xs, y:ys, customdata:nodeCustomData },
+    link:{ source:src, target:tgt, value:val }
+  }];
+
+  const layout = { margin:{l:10,r:10,t:10,b:10}, font:{size:12}, hovermode:'x' };
+  Plotly.react(CH, trace, layout, {displaylogo:false});
+  
+  // Store node data globally for click handler
+  window._sankeyNodeData = nodeCustomData;
+  
+  // Attach click handlers to Sankey nodes after render (with retries)
+  setTimeout(() => attachNodeClickHandlers(), 200);
+  setTimeout(() => attachNodeClickHandlers(), 500);
+  setTimeout(() => attachNodeClickHandlers(), 1000);
+  setTimeout(() => attachNodeClickHandlers(), 2000);
+}
+
+// initial render
+render();
+
+// ---------- Goal Actions Modal ----------
+const linkModal = document.getElementById('linkModal');
+const linkTitle = document.getElementById('linkTitle');
+const linkCancel = document.getElementById('link_cancel');
+const goalDueDisplay = document.getElementById('goalDueDisplay');
+const goalParentsDisplay = document.getElementById('goalParentsDisplay');
+const goalChildrenDisplay = document.getElementById('goalChildrenDisplay');
+const btnEditGoal = document.getElementById('btnEditGoal');
+const btnAddParent = document.getElementById('btnAddParent');
+const btnAddChild = document.getElementById('btnAddChild');
+const btnManageParents = document.getElementById('btnManageParents');
+const btnManageChildren = document.getElementById('btnManageChildren');
+
+// Create Goal Modal
+const createGoalModal = document.getElementById('createGoalModal');
+const createGoalTitle = document.getElementById('createGoalTitle');
+const createGoalSubtitle = document.getElementById('createGoalSubtitle');
+const newGoalName = document.getElementById('newGoalName');
+const newGoalDue = document.getElementById('newGoalDue');
+const newGoalDesc = document.getElementById('newGoalDesc');
+const createGoalBtn = document.getElementById('createGoalBtn');
+const createGoalCancel = document.getElementById('createGoal_cancel');
+
+const toast = document.getElementById('toast');
+
+let selectedGoalId = null;
+let createMode = null; // 'parent' or 'child'
+
+function showToast(msg, isError = false) {
+  toast.textContent = msg;
+  toast.style.background = isError ? '#d32f2f' : '#388e3c';
+  toast.style.opacity = '1';
+  setTimeout(() => { toast.style.opacity = '0'; }, 3000);
+}
+
+// Get parents and children for a goal
+function getGoalRelationships(goalId) {
+  const parents = [];
+  const children = [];
+  EDGES.forEach(e => {
+    if (e.child === goalId) {
+      const parent = goalById.get(e.parent);
+      if (parent) parents.push(parent.name);
+    }
+    if (e.parent === goalId) {
+      const child = goalById.get(e.child);
+      if (child) children.push(child.name);
+    }
+  });
+  return { parents, children };
+}
+
+function openLinkModal(goalId) {
+  const goal = goalById.get(goalId);
+  if (!goal) return;
+  
+  selectedGoalId = goalId;
+  
+  // Set goal details
+  linkTitle.textContent = goal.name;
+  goalDueDisplay.textContent = goal.due || '-';
+  
+  const rels = getGoalRelationships(goalId);
+  goalParentsDisplay.textContent = rels.parents.length ? rels.parents.join(', ') : 'None';
+  goalChildrenDisplay.textContent = rels.children.length ? rels.children.join(', ') : 'None';
+  
+  // Set links
+  btnEditGoal.href = `/goals`;
+  btnManageParents.href = `/links/parents/${goalId}`;
+  btnManageChildren.href = `/links/goal/${goalId}`;
+  
+  linkModal.classList.remove('hidden');
+}
+
+function closeLinkModal() {
+  linkModal.classList.add('hidden');
+  selectedGoalId = null;
+}
+
+// ---------- Create Goal Modal ----------
+function openCreateGoalModal(mode) {
+  createMode = mode;
+  const goal = goalById.get(selectedGoalId);
+  
+  if (mode === 'parent') {
+    createGoalTitle.textContent = 'Create New Parent';
+    createGoalSubtitle.textContent = `This new goal will become a parent of "${goal.name}"`;
+  } else {
+    createGoalTitle.textContent = 'Create New Child';
+    createGoalSubtitle.textContent = `This new goal will become a child of "${goal.name}"`;
+  }
+  
+  newGoalName.value = '';
+  newGoalDue.value = '';
+  newGoalDesc.value = '';
+  createGoalModal.classList.remove('hidden');
+  newGoalName.focus();
+}
+
+function closeCreateGoalModal() {
+  createGoalModal.classList.add('hidden');
+  createMode = null;
+}
+
+async function createAndLinkGoal() {
+  const name = newGoalName.value.trim();
+  if (!name) {
+    showToast('Goal name is required', true);
+    newGoalName.focus();
+    return;
+  }
+  
+  const due = newGoalDue.value;
+  const desc = newGoalDesc.value.trim();
+  
+  let url;
+  if (createMode === 'parent') {
+    url = `/goals/${selectedGoalId}/create-and-link-parent`;
+  } else {
+    url = `/goals/${selectedGoalId}/create-and-link-child`;
+  }
+  
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, due_date: due, description: desc })
+    });
+    const data = await resp.json();
+    
+    if (data.ok) {
+      const selectedGoal = goalById.get(selectedGoalId);
+      if (createMode === 'parent') {
+        showToast(`Created "${name}" as parent of "${selectedGoal.name}"`);
+      } else {
+        showToast(`Created "${name}" as child of "${selectedGoal.name}"`);
+      }
+      closeCreateGoalModal();
+      closeLinkModal();
+      window.location.reload();
+    } else {
+      showToast(data.error || 'Failed to create goal', true);
+    }
+  } catch (err) {
+    showToast('Network error: ' + err.message, true);
+  }
+}
+
+async function addLink(targetId) {
+  if (!selectedGoalId || !linkMode) return;
+  
+  let url;
+  if (linkMode === 'parent') {
+    // Target becomes parent of selected
+    url = `/goals/${selectedGoalId}/add-parent/${targetId}`;
+  } else {
+    // Target becomes child of selected
+    url = `/goals/${selectedGoalId}/add-child/${targetId}`;
+  }
+  
+  try {
+    const resp = await fetch(url, { method: 'POST' });
+    const data = await resp.json();
+    
+    if (data.ok) {
+      const targetGoal = goalById.get(targetId);
+      const selectedGoal = goalById.get(selectedGoalId);
+      if (linkMode === 'parent') {
+        showToast(`Added "${targetGoal.name}" as parent of "${selectedGoal.name}"`);
+      } else {
+        showToast(`Added "${targetGoal.name}" as child of "${selectedGoal.name}"`);
+      }
+      closeLinkModal();
+      // Reload page to get fresh data
+      window.location.reload();
+    } else {
+      showToast(data.error || 'Failed to add link', true);
+    }
+  } catch (err) {
+    showToast('Network error: ' + err.message, true);
+  }
+}
+
+// Event listeners - Main modal
+linkCancel.addEventListener('click', closeLinkModal);
+linkModal.addEventListener('click', (e) => { if (e.target === linkModal) closeLinkModal(); });
+btnAddParent.addEventListener('click', () => openCreateGoalModal('parent'));
+btnAddChild.addEventListener('click', () => openCreateGoalModal('child'));
+
+// Event listeners - Create goal modal
+createGoalCancel.addEventListener('click', closeCreateGoalModal);
+createGoalModal.addEventListener('click', (e) => { if (e.target === createGoalModal) closeCreateGoalModal(); });
+createGoalBtn.addEventListener('click', createAndLinkGoal);
+newGoalName.addEventListener('keypress', (e) => { if (e.key === 'Enter') createAndLinkGoal(); });
+
+// ---------- Plotly Click Handler ----------
+// Build reverse lookup: goal name -> goal id
+const goalByName = new Map(GOALS.map(g => [g.name, g.id]));
+
+// Function to create clickable overlay buttons on top of node labels
+function attachNodeClickHandlers() {
+  const overlay = document.getElementById('clickOverlay');
+  const chartWrap = CH.parentElement;
+  const svg = CH.querySelector('svg');
+  
+  if (!svg || !overlay || !chartWrap) {
+    console.log('Missing elements - svg:', !!svg, 'overlay:', !!overlay, 'chartWrap:', !!chartWrap);
+    return;
+  }
+  
+  // Clear existing buttons
+  overlay.innerHTML = '';
+  
+  // Find all text elements in the SVG
+  const textElements = svg.querySelectorAll('text');
+  console.log('Found', textElements.length, 'text elements');
+  
+  // Get chart wrapper position (not the chart div which might have different positioning)
+  const wrapRect = chartWrap.getBoundingClientRect();
+  let buttonsCreated = 0;
+  
+  textElements.forEach((textEl) => {
+    const text = textEl.textContent?.trim();
+    if (!text) return;
+    
+    const goalId = goalByName.get(text);
+    if (!goalId) {
+      // Skip non-goal text (like axis labels)
+      return;
+    }
+    
+    // Get the position of this text element
+    const textRect = textEl.getBoundingClientRect();
+    
+    // Skip if the text has no size (not rendered yet)
+    if (textRect.width === 0 || textRect.height === 0) {
+      console.log('Skipping zero-size text:', text);
+      return;
+    }
+    
+    // Create a clickable button overlay
+    const btn = document.createElement('button');
+    btn.className = 'node-click-btn';
+    btn.style.position = 'absolute';
+    btn.style.left = (textRect.left - wrapRect.left) + 'px';
+    btn.style.top = (textRect.top - wrapRect.top) + 'px';
+    btn.style.width = Math.max(textRect.width, 50) + 'px';
+    btn.style.height = Math.max(textRect.height, 20) + 'px';
+    btn.style.pointerEvents = 'auto';
+    btn.style.background = 'transparent';
+    btn.style.border = 'none';
+    btn.title = 'Click to manage: ' + text;
+    
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      console.log('Overlay button clicked:', text, goalId);
+      openLinkModal(goalId);
+    });
+    
+    overlay.appendChild(btn);
+    buttonsCreated++;
+  });
+  
+  console.log('Created', buttonsCreated, 'clickable overlay buttons');
+}
+
+// Also use Plotly's native click event as backup
+CH.on('plotly_click', function(data) {
+  if (data.points && data.points.length > 0) {
+    const point = data.points[0];
+    
+    // Check if it's a node click (not link)
+    if (point.pointNumber != null && point.label) {
+      const goalId = point.customdata || goalByName.get(point.label);
+      if (goalId) {
+        openLinkModal(goalId);
+      }
+    }
+  }
+});
+
+// Event delegation - capture ALL clicks
+CH.addEventListener('click', function(e) {
+  let target = e.target;
+  const tagName = target.tagName?.toLowerCase();
+  const className = target.className?.baseVal || target.className || '';
+  
+  console.log('Chart click! Tag:', tagName, 'Class:', className);
+  
+  // If clicking on a link (path), show a helpful message
+  if (tagName === 'path' && className.includes('sankey-link')) {
+    showToast('Click on a node label (text) to add relationships', false);
+    return;
+  }
+  
+  // Walk up the DOM to find relevant elements
+  while (target && target !== CH) {
+    const tagName = target.tagName?.toLowerCase();
+    
+    // Check if it's a text element (node label)
+    if (tagName === 'text') {
+      const text = target.textContent?.trim();
+      console.log('Found text element:', text);
+      const goalId = goalByName.get(text);
+      if (goalId) {
+        console.log('Opening modal for:', text, 'goalId:', goalId);
+        openLinkModal(goalId);
+        return;
+      }
+    }
+    
+    // Check if it's a rect - look for nearby text
+    if (tagName === 'rect') {
+      console.log('Found rect element');
+      const parent = target.parentElement;
+      if (parent) {
+        const textEl = parent.querySelector('text');
+        if (textEl) {
+          const text = textEl.textContent?.trim();
+          console.log('Found nearby text:', text);
+          const goalId = goalByName.get(text);
+          if (goalId) {
+            openLinkModal(goalId);
+            return;
+          }
+        }
+      }
+    }
+    
+    target = target.parentElement;
+  }
+}, true); // Use capture phase
+
+// Also add listener directly to document as ultimate fallback
+document.addEventListener('click', function(e) {
+  // Only care about clicks within the chart
+  if (!CH.contains(e.target)) return;
+  
+  const tagName = e.target.tagName?.toLowerCase();
+  if (tagName === 'text') {
+    const text = e.target.textContent?.trim();
+    const goalId = goalByName.get(text);
+    if (goalId) {
+      console.log('Document listener caught text click:', text);
+      openLinkModal(goalId);
+    }
+  }
+}, true);
+
+console.log('Sankey script fully loaded. goalByName map has', goalByName.size, 'entries');
+console.log('Click on any node label to link goals, or use the "Test Link Modal" button.');
+
+// Reattach overlay buttons on window resize
+window.addEventListener('resize', () => {
+  setTimeout(() => attachNodeClickHandlers(), 200);
+});
+
+// Reattach overlay buttons when Plotly diagram changes (drag, zoom, etc.)
+CH.on('plotly_relayout', () => {
+  console.log('Plotly relayout - updating overlay buttons');
+  setTimeout(() => attachNodeClickHandlers(), 100);
+});
+
+CH.on('plotly_restyle', () => {
+  console.log('Plotly restyle - updating overlay buttons');
+  setTimeout(() => attachNodeClickHandlers(), 100);
+});
+
+CH.on('plotly_update', () => {
+  console.log('Plotly update - updating overlay buttons');
+  setTimeout(() => attachNodeClickHandlers(), 100);
+});
+
+// Also listen for any mouse up event on the chart (end of drag)
+CH.addEventListener('mouseup', () => {
+  setTimeout(() => attachNodeClickHandlers(), 150);
+});
+
+// And pointer/touch events for mobile
+CH.addEventListener('pointerup', () => {
+  setTimeout(() => attachNodeClickHandlers(), 150);
+});
+</script>
+{% endblock %}

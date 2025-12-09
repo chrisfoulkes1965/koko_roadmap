@@ -1,0 +1,410 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  #mindmap {
+    width: 100%;
+    height: 800px;
+    border: 1px solid var(--b);
+    border-radius: 8px;
+    background: #fff;
+    overflow: hidden;
+  }
+  
+  .node circle {
+    fill: #1a7;
+    stroke: #fff;
+    stroke-width: 2px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  
+  .node circle:hover {
+    fill: #0d5;
+    transform: scale(1.2);
+  }
+  
+  .node.root circle {
+    fill: #1976d2;
+    r: 12;
+  }
+  
+  .node text {
+    font-size: 12px;
+    fill: #333;
+    pointer-events: none;
+  }
+  
+  .link {
+    fill: none;
+    stroke: #ccc;
+    stroke-width: 2px;
+  }
+  
+  .link:hover {
+    stroke: #999;
+    stroke-width: 3px;
+  }
+  
+  .tooltip {
+    position: absolute;
+    background: #333;
+    color: #fff;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    pointer-events: none;
+    z-index: 1000;
+    max-width: 300px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+  }
+  
+  .controls {
+    margin: 0.5rem 0;
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  
+  .legend {
+    display: flex;
+    gap: 1rem;
+    margin-left: auto;
+    font-size: 0.85rem;
+    color: #666;
+  }
+  
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+  
+  .legend-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+  }
+</style>
+
+<h2>Mind Map</h2>
+<p class="small">
+  Interactive visualization of goal hierarchy. Drag to pan, scroll to zoom, click nodes to manage.
+</p>
+
+<div class="controls">
+  <button class="btn" id="zoomIn">+ Zoom In</button>
+  <button class="btn" id="zoomOut">- Zoom Out</button>
+  <button class="btn" id="resetView">Reset View</button>
+  <button class="btn" id="expandAll">Expand All</button>
+  <button class="btn" id="collapseAll">Collapse All</button>
+  
+  <div class="legend">
+    <div class="legend-item">
+      <div class="legend-dot" style="background: #1976d2;"></div>
+      <span>Root Goal</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-dot" style="background: #1a7;"></div>
+      <span>Goal</span>
+    </div>
+  </div>
+</div>
+
+<div id="mindmap"></div>
+
+<!-- Tooltip -->
+<div id="tooltip" class="tooltip" style="display: none;"></div>
+
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script>
+const DATA = {{ data|tojson }};
+const GOALS = DATA.goals || [];
+const EDGES = DATA.edges || [];
+
+// Build lookup maps
+const goalById = new Map(GOALS.map(g => [g.id, g]));
+
+// Build parent-child relationships
+const childrenByParent = new Map();
+const parentByChild = new Map();
+EDGES.forEach(e => {
+  if (!childrenByParent.has(e.parent)) {
+    childrenByParent.set(e.parent, []);
+  }
+  childrenByParent.get(e.parent).push(e.child);
+  
+  if (!parentByChild.has(e.child)) {
+    parentByChild.set(e.child, []);
+  }
+  parentByChild.get(e.child).push(e.parent);
+});
+
+// Find root nodes (nodes without parents)
+const rootIds = GOALS.filter(g => !parentByChild.has(g.id) || parentByChild.get(g.id).length === 0).map(g => g.id);
+
+// Build hierarchical data structure
+function buildTree(nodeId, visited = new Set()) {
+  if (visited.has(nodeId)) return null; // Prevent cycles
+  visited.add(nodeId);
+  
+  const goal = goalById.get(nodeId);
+  if (!goal) return null;
+  
+  const children = (childrenByParent.get(nodeId) || [])
+    .map(childId => buildTree(childId, new Set(visited)))
+    .filter(c => c !== null);
+  
+  return {
+    id: nodeId,
+    name: goal.name,
+    due: goal.due,
+    start: goal.start,
+    tags: goal.tags,
+    children: children.length > 0 ? children : undefined
+  };
+}
+
+// Create a virtual root if multiple roots exist
+let treeData;
+if (rootIds.length === 0) {
+  treeData = { id: 0, name: 'No Goals', children: [] };
+} else if (rootIds.length === 1) {
+  treeData = buildTree(rootIds[0]) || { id: 0, name: 'Empty', children: [] };
+} else {
+  // Multiple roots - create virtual root
+  treeData = {
+    id: 0,
+    name: 'Roadmap',
+    isVirtualRoot: true,
+    children: rootIds.map(id => buildTree(id)).filter(t => t !== null)
+  };
+}
+
+// Set up SVG
+const container = document.getElementById('mindmap');
+const width = container.clientWidth;
+const height = container.clientHeight || 800;
+
+const svg = d3.select('#mindmap')
+  .append('svg')
+  .attr('width', '100%')
+  .attr('height', '100%')
+  .attr('viewBox', [0, 0, width, height]);
+
+// Add zoom behavior
+const g = svg.append('g');
+
+const zoom = d3.zoom()
+  .scaleExtent([0.1, 4])
+  .on('zoom', (event) => {
+    g.attr('transform', event.transform);
+  });
+
+svg.call(zoom);
+
+// Initial transform to center
+const initialTransform = d3.zoomIdentity.translate(100, height / 2);
+svg.call(zoom.transform, initialTransform);
+
+// Create tree layout - horizontal orientation
+const treeLayout = d3.tree()
+  .size([height - 100, width - 300])
+  .separation((a, b) => (a.parent === b.parent ? 1 : 1.5));
+
+// Create hierarchy
+const root = d3.hierarchy(treeData);
+
+// Collapse function
+function collapse(d) {
+  if (d.children) {
+    d._children = d.children;
+    d._children.forEach(collapse);
+    d.children = null;
+  }
+}
+
+// Expand function
+function expand(d) {
+  if (d._children) {
+    d.children = d._children;
+    d._children = null;
+  }
+  if (d.children) {
+    d.children.forEach(expand);
+  }
+}
+
+// Toggle children on click
+function toggle(event, d) {
+  if (d.children) {
+    d._children = d.children;
+    d.children = null;
+  } else if (d._children) {
+    d.children = d._children;
+    d._children = null;
+  }
+  update(d);
+}
+
+// Tooltip
+const tooltip = document.getElementById('tooltip');
+
+function showTooltip(event, d) {
+  const goal = d.data;
+  let html = `<strong>${goal.name}</strong>`;
+  if (goal.start) html += `<br>Start: ${goal.start}`;
+  if (goal.due) html += `<br>Due: ${goal.due}`;
+  if (goal.tags) html += `<br>Tags: ${goal.tags}`;
+  if (d._children) html += `<br><em>(${d._children.length} collapsed)</em>`;
+  
+  tooltip.innerHTML = html;
+  tooltip.style.display = 'block';
+  tooltip.style.left = (event.pageX + 10) + 'px';
+  tooltip.style.top = (event.pageY - 10) + 'px';
+}
+
+function hideTooltip() {
+  tooltip.style.display = 'none';
+}
+
+// Update function
+function update(source) {
+  const duration = 300;
+  
+  // Compute new layout
+  treeLayout(root);
+  
+  const nodes = root.descendants();
+  const links = root.links();
+  
+  // Normalize for fixed-depth (horizontal tree)
+  nodes.forEach(d => {
+    d.y = d.depth * 180;
+  });
+  
+  // Update nodes
+  const node = g.selectAll('.node')
+    .data(nodes, d => d.data.id);
+  
+  // Enter new nodes
+  const nodeEnter = node.enter()
+    .append('g')
+    .attr('class', d => 'node' + (d.depth === 0 ? ' root' : ''))
+    .attr('transform', d => `translate(${source.y0 || d.y},${source.x0 || d.x})`)
+    .on('click', toggle)
+    .on('mouseover', showTooltip)
+    .on('mousemove', showTooltip)
+    .on('mouseout', hideTooltip);
+  
+  nodeEnter.append('circle')
+    .attr('r', d => d.depth === 0 ? 12 : 8)
+    .attr('fill', d => d._children ? '#f0a030' : (d.depth === 0 ? '#1976d2' : '#1a7'));
+  
+  nodeEnter.append('text')
+    .attr('dy', '0.35em')
+    .attr('x', d => d.children || d._children ? -15 : 15)
+    .attr('text-anchor', d => d.children || d._children ? 'end' : 'start')
+    .text(d => d.data.name.length > 30 ? d.data.name.substring(0, 30) + '...' : d.data.name)
+    .style('font-weight', d => d.depth === 0 ? 'bold' : 'normal');
+  
+  // Update existing nodes
+  const nodeUpdate = nodeEnter.merge(node);
+  
+  nodeUpdate.transition()
+    .duration(duration)
+    .attr('transform', d => `translate(${d.y},${d.x})`);
+  
+  nodeUpdate.select('circle')
+    .attr('fill', d => d._children ? '#f0a030' : (d.depth === 0 ? '#1976d2' : '#1a7'));
+  
+  // Remove exiting nodes
+  node.exit()
+    .transition()
+    .duration(duration)
+    .attr('transform', d => `translate(${source.y},${source.x})`)
+    .remove();
+  
+  // Update links
+  const link = g.selectAll('.link')
+    .data(links, d => d.target.data.id);
+  
+  // Enter new links
+  const linkEnter = link.enter()
+    .insert('path', '.node')
+    .attr('class', 'link')
+    .attr('d', d => {
+      const o = { x: source.x0 || source.x, y: source.y0 || source.y };
+      return diagonal({ source: o, target: o });
+    });
+  
+  // Update existing links
+  linkEnter.merge(link)
+    .transition()
+    .duration(duration)
+    .attr('d', diagonal);
+  
+  // Remove exiting links
+  link.exit()
+    .transition()
+    .duration(duration)
+    .attr('d', d => {
+      const o = { x: source.x, y: source.y };
+      return diagonal({ source: o, target: o });
+    })
+    .remove();
+  
+  // Store positions for transitions
+  nodes.forEach(d => {
+    d.x0 = d.x;
+    d.y0 = d.y;
+  });
+}
+
+// Diagonal line generator for horizontal tree
+function diagonal(d) {
+  return `M${d.source.y},${d.source.x}
+          C${(d.source.y + d.target.y) / 2},${d.source.x}
+           ${(d.source.y + d.target.y) / 2},${d.target.x}
+           ${d.target.y},${d.target.x}`;
+}
+
+// Initial render
+root.x0 = height / 2;
+root.y0 = 0;
+update(root);
+
+// Control buttons
+document.getElementById('zoomIn').addEventListener('click', () => {
+  svg.transition().call(zoom.scaleBy, 1.3);
+});
+
+document.getElementById('zoomOut').addEventListener('click', () => {
+  svg.transition().call(zoom.scaleBy, 0.7);
+});
+
+document.getElementById('resetView').addEventListener('click', () => {
+  svg.transition().call(zoom.transform, initialTransform);
+});
+
+document.getElementById('expandAll').addEventListener('click', () => {
+  expand(root);
+  update(root);
+});
+
+document.getElementById('collapseAll').addEventListener('click', () => {
+  root.children?.forEach(collapse);
+  update(root);
+});
+
+// Handle window resize
+window.addEventListener('resize', () => {
+  const newWidth = container.clientWidth;
+  const newHeight = container.clientHeight || 800;
+  svg.attr('viewBox', [0, 0, newWidth, newHeight]);
+  treeLayout.size([newHeight - 100, newWidth - 300]);
+  update(root);
+});
+</script>
+{% endblock %}
+

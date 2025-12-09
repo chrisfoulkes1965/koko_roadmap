@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>KOKO Roadmap</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script>const fmt=(v)=>(!v||String(v).toLowerCase()==='nan')?'':v;</script>
+  <style>
+    thead .filter-row input{
+      width: 98%;
+      box-sizing: border-box;
+      padding: .3rem .4rem;
+      font-size: .9rem;
+    }
+    th.sortable { cursor: pointer; user-select: none; }
+    th.sortable .arrow { opacity:.35; margin-left:.35rem; }
+    th.sortable[aria-sort="ascending"] .arrow::after { content:"▲"; }
+    th.sortable[aria-sort="descending"] .arrow::after { content:"▼"; }
+    th.sortable[aria-sort="none"] .arrow::after { content:"▽"; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <strong>KOKO Roadmap</strong>
+      <a href="/">Home</a>
+      <a href="/sankey">Sankey</a>
+      <a href="/mindmap">Mind Map</a>
+      <a href="/goals">Goals</a>
+      <div class="right small">Excel: <code id="excel_path">{{ excel_path }}</code></div>
+    </div>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  <script>
+  (function () {
+    function detectType(headerText){
+      const t = (headerText||'').toLowerCase();
+      if (t === 'id') return 'number';
+      if (t.includes('due')) return 'date';
+      return 'string';
+    }
+    function parseFor(type, text){
+      const s = (text||'').trim();
+      if (!s) return null;
+      if (type === 'number'){
+        const n = Number(s.replace(/,/g,''));
+        return Number.isFinite(n) ? n : null;
+      }
+      if (type === 'date'){
+        // Try ISO first, then Date.parse fallback
+        // Normalise dd/mm/yyyy and yyyy/mm/dd variants
+        const m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/) || s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+        let d;
+        if (m){
+          if (m[1].length === 4){ // yyyy-mm-dd
+            d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+          } else { // dd-mm-yyyy
+            d = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+          }
+        } else {
+          const ts = Date.parse(s);
+          d = isNaN(ts) ? null : new Date(ts);
+        }
+        return d ? d.getTime() : null;
+      }
+      return s.toLowerCase();
+    }
+    function cellText(td){
+      if (!td) return '';
+      // Prefer visible text
+      const t = td.textContent || '';
+      return t.replace(/\s+/g,' ').trim();
+    }
+    function makeFilterRow(table, types){
+      const thead = table.tHead || table.createTHead();
+      const topRow = thead.rows[0];
+      if (!topRow) return;
+      const fRow = thead.insertRow(1);
+      fRow.classList.add('filter-row');
+      for (let c = 0; c < topRow.cells.length; c++){
+        const th = document.createElement('th');
+        const label = (topRow.cells[c].textContent||'').trim().toLowerCase();
+        // Skip filter for obvious action columns
+        if (label === 'edit' || label === '' || label === 'links'){
+          th.innerHTML = '';
+          fRow.appendChild(th);
+          continue;
+        }
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = 'Filter…';
+        input.dataset.colIndex = String(c);
+        input.addEventListener('input', () => applyFilters(table));
+        th.appendChild(input);
+        fRow.appendChild(th);
+      }
+      table.dataset.hasFilterRow = '1';
+    }
+    function applyFilters(table){
+      const thead = table.tHead;
+      const filterRow = thead && thead.rows[1] && thead.rows[1].classList.contains('filter-row') ? thead.rows[1] : null;
+      const inputs = filterRow ? Array.from(filterRow.querySelectorAll('input')) : [];
+      const filters = inputs.map(i => ({col: Number(i.dataset.colIndex), val: i.value.trim().toLowerCase()}))
+                            .filter(f => f.val.length > 0);
+      const tbody = table.tBodies[0];
+      if (!tbody) return;
+      Array.from(tbody.rows).forEach(tr => {
+        const ok = filters.every(f => {
+          const td = tr.cells[f.col];
+          const text = cellText(td).toLowerCase();
+          return text.includes(f.val);
+        });
+        tr.style.display = ok ? '' : 'none';
+      });
+    }
+    function makeSortable(table){
+      const thead = table.tHead || table.createTHead();
+      const headRow = thead.rows[0];
+      if (!headRow) return;
+      const types = [];
+      for (let c=0; c<headRow.cells.length; c++){
+        const th = headRow.cells[c];
+        const label = (th.textContent||'').trim();
+        const type = detectType(label);
+        types.push(type);
+        // Skip obvious action columns
+        const low = label.toLowerCase();
+        if (low === 'edit' || low === '') continue;
+
+        th.classList.add('sortable');
+        th.setAttribute('aria-sort','none');
+        const arrow = document.createElement('span'); arrow.className='arrow';
+        th.appendChild(arrow);
+
+        th.addEventListener('click', () => {
+          const current = th.getAttribute('aria-sort') || 'none';
+          const next = current === 'ascending' ? 'descending' : 'ascending';
+          // reset siblings
+          for (let k=0; k<headRow.cells.length; k++){
+            headRow.cells[k].setAttribute('aria-sort', k===c ? next : 'none');
+          }
+          sortByColumn(table, c, types[c], next === 'ascending');
+          applyFilters(table); // keep filters applied after sort
+        });
+      }
+      // Add filter row once types are known
+      if (!table.dataset.hasFilterRow) makeFilterRow(table, types);
+    }
+    function sortByColumn(table, colIndex, type, asc){
+      const tbody = table.tBodies[0];
+      if (!tbody) return;
+      const rows = Array.from(tbody.rows);
+      const dir = asc ? 1 : -1;
+      rows.sort((a,b)=>{
+        const av = parseFor(type, cellText(a.cells[colIndex]));
+        const bv = parseFor(type, cellText(b.cells[colIndex]));
+        if (av == null && bv == null) return 0;
+        if (av == null) return 1; // nulls last
+        if (bv == null) return -1;
+        if (av < bv) return -1*dir;
+        if (av > bv) return 1*dir;
+        return 0;
+      });
+      rows.forEach(r => tbody.appendChild(r));
+    }
+    function enhanceAll(){
+      document.querySelectorAll('table').forEach(tbl => {
+        // Only enhance once
+        if (tbl.dataset.enhanced) return;
+        makeSortable(tbl);
+        tbl.dataset.enhanced = '1';
+      });
+    }
+    if (document.readyState === 'loading'){
+      document.addEventListener('DOMContentLoaded', enhanceAll);
+    } else {
+      enhanceAll();
+    }
+  })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,191 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Areas & Sub-areas</h2>
+
+<div class="row-actions" style="margin:.5rem 0;">
+  <button class="btn primary" id="a_add">Add Area</button>
+</div>
+
+<ul class="tree">
+  {% for a in areas %}
+    <li>
+      <div class="tree-row">
+        <strong>{{ a.area_name }}</strong>
+        <span class="muted">{% if a.rank is not none %}(rank {{ a.rank }}){% endif %}</span>
+        <button class="btn small a-edit" data-id="{{ a.area_id }}" data-name="{{ a.area_name }}" data-rank="{{ a.rank if a.rank is not none else '' }}">Edit</button>
+        <button class="btn small outline a-add-sub" data-area="{{ a.area_id }}">Add sub-area</button>
+      </div>
+      {% set subs = subareas_by_area.get(a.area_id, []) %}
+      {% if subs %}
+        <ul>
+          {% for s in subs %}
+            <li>
+              <div class="tree-row">
+                <span>↳ {{ s.subarea_name }}</span>
+                <span class="muted">{% if s.rank is not none %}(rank {{ s.rank }}){% endif %}</span>
+                <button class="btn small sa-edit" data-id="{{ s.subarea_id }}" data-name="{{ s.subarea_name }}" data-area="{{ a.area_id }}" data-rank="{{ s.rank if s.rank is not none else '' }}">Edit</button>
+              </div>
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </li>
+  {% endfor %}
+</ul>
+
+<!-- Area Modal -->
+<div class="modal hidden" id="areaModal">
+  <div class="content">
+    <h3 id="areaModalTitle">Edit Area</h3>
+    <form id="areaForm" class="kv">
+      <input type="hidden" id="a_id">
+      <label>Area name</label>
+      <input id="a_name" type="text">
+      <label>Rank</label>
+      <input id="a_rank" type="number" step="1">
+      <div class="actions">
+        <button type="button" class="btn" id="a_cancel">Cancel</button>
+        <button class="btn primary" type="submit" id="a_save">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Sub-area Modal -->
+<div class="modal hidden" id="subModal">
+  <div class="content">
+    <h3 id="subModalTitle">Edit Sub-area</h3>
+    <form id="subForm" class="kv">
+      <input type="hidden" id="sa_id">
+      <label>Sub-area name</label>
+      <input id="sa_name" type="text">
+      <label>Area</label>
+      <select id="sa_area"></select>
+      <label>Rank</label>
+      <input id="sa_rank" type="number" step="1">
+      <div class="actions">
+        <button type="button" class="btn" id="sa_cancel">Cancel</button>
+        <button class="btn primary" type="submit" id="sa_save">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+const AREAS_LIST = {{ areas|tojson }};
+
+const aM = document.getElementById('areaModal');
+const aF = document.getElementById('areaForm');
+const aId = document.getElementById('a_id');
+const aName = document.getElementById('a_name');
+const aRank = document.getElementById('a_rank');
+const aCancel = document.getElementById('a_cancel');
+const aAdd = document.getElementById('a_add');
+const aTitleEl = document.getElementById('areaModalTitle');
+const aSaveBtn = document.getElementById('a_save');
+
+const saM = document.getElementById('subModal');
+const saF = document.getElementById('subForm');
+const saId = document.getElementById('sa_id');
+const saName = document.getElementById('sa_name');
+const saArea = document.getElementById('sa_area');
+const saRank = document.getElementById('sa_rank');
+const saCancel = document.getElementById('sa_cancel');
+const saTitleEl = document.getElementById('subModalTitle');
+const saSaveBtn = document.getElementById('sa_save');
+
+function setAreaOptions(selectEl, selected){
+  const opts = ['<option value="">— choose —</option>'].concat(
+    AREAS_LIST.map(a => `<option value="${a.area_id}">${a.area_name}</option>`)
+  );
+  selectEl.innerHTML = opts.join('');
+  if (selected) selectEl.value = String(selected);
+}
+
+function aOpen(id, name, rank){
+  aId.value = String(id);
+  aName.value = name || '';
+  aRank.value = (rank ?? '') === null ? '' : (rank ?? '');
+  aTitleEl.textContent = 'Edit Area';
+  aSaveBtn.textContent = 'Save';
+  aM.classList.remove('hidden');
+}
+
+aAdd.addEventListener('click', () => {
+  aId.value = '';
+  aName.value = '';
+  aRank.value = '';
+  aTitleEl.textContent = 'Add Area';
+  aSaveBtn.textContent = 'Create';
+  aM.classList.remove('hidden');
+});
+
+aCancel.addEventListener('click', ()=> aM.classList.add('hidden'));
+aM.addEventListener('click', (e)=>{ if (e.target === aM) aM.classList.add('hidden'); });
+
+document.querySelectorAll('.a-edit').forEach(b=>{
+  b.addEventListener('click', ()=> aOpen(b.dataset.id, b.dataset.name, b.dataset.rank));
+});
+
+// Add Sub-area button under each Area
+document.querySelectorAll('.a-add-sub').forEach(b=>{
+  b.addEventListener('click', ()=> {
+    saId.value = ''; // ADD mode
+    saName.value = '';
+    setAreaOptions(saArea, b.dataset.area);
+    saRank.value = '';
+    saTitleEl.textContent = 'Add Sub-area';
+    saSaveBtn.textContent = 'Create';
+    saM.classList.remove('hidden');
+  });
+});
+
+// Sub-area edit open
+document.querySelectorAll('.sa-edit').forEach(b=>{
+  b.addEventListener('click', ()=> {
+    saId.value = b.dataset.id;
+    saName.value = b.dataset.name || '';
+    setAreaOptions(saArea, b.dataset.area);
+    saRank.value = b.dataset.rank || '';
+    saTitleEl.textContent = 'Edit Sub-area';
+    saSaveBtn.textContent = 'Save';
+    saM.classList.remove('hidden');
+  });
+});
+
+saCancel.addEventListener('click', ()=> saM.classList.add('hidden'));
+saM.addEventListener('click', (e)=>{ if (e.target === saM) saM.classList.add('hidden'); });
+
+// Submit handlers
+aF.addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const id = (aId.value || '').trim();
+  const fd = new FormData();
+  fd.append('area_name', (aName.value||'').trim());
+  fd.append('rank', aRank.value);
+  const url = id ? `/areas/${id}/edit-inline` : `/areas/add-inline`;
+  const resp = await fetch(url, { method:'POST', body: fd, headers: { 'Accept':'application/json' } });
+  const ct = (resp.headers.get('content-type')||'').toLowerCase();
+  if (!ct.includes('application/json')) { alert('Server returned non-JSON:\\n'+await resp.text()); return; }
+  const data = await resp.json();
+  if (!data.ok) { alert(data.error || 'Failed'); return; }
+  location.reload();
+});
+
+saF.addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const id = (saId.value || '').trim();
+  const fd = new FormData();
+  fd.append('subarea_name', (saName.value||'').trim());
+  fd.append('area_id', saArea.value);
+  fd.append('rank', saRank.value);
+  const url = id ? `/areas/sub/${id}/edit-inline` : `/areas/sub/add-inline`;
+  const resp = await fetch(url, { method:'POST', body: fd, headers: { 'Accept':'application/json' } });
+  const ct = (resp.headers.get('content-type')||'').toLowerCase();
+  if (!ct.includes('application/json')) { alert('Server returned non-JSON:\\n'+await resp.text()); return; }
+  const data = await resp.json();
+  if (!data.ok) { alert(data.error || 'Failed'); return; }
+  location.reload();
+});
+</script>
+{% endblock %}
