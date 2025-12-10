@@ -11,6 +11,7 @@ ENV/
 
 # Excel files (keep structure but ignore data)
 *.xlsx
+!roadmap.xlsx
 !roadmap.xlsx.template
 
 # CSV files
