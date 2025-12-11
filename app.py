@@ -205,6 +205,55 @@ def mindmap():
     return render_template('mindmap.html', data=payload)
 
 
+@app.get('/gantt')
+def gantt():
+    # Data
+    gs = read_goals()
+    # Filter out goals where display is explicitly 0 (No), but keep NaN/null (default to Yes)
+    gs = gs[(gs['display'].isna()) | (gs['display'] != 0)]
+    rels = read_relationships()
+
+    # Helpers
+    def _iso(x):  # ISO date ('' if blank/invalid)
+        return _fmt_date_only(x)
+
+    # Goals payload with dates
+    goals_rows = [] if gs.empty else [
+        dict(
+            id=int(r['id']), 
+            name=r.get('name',''), 
+            start=_iso(r.get('start_date','')), 
+            due=_iso(r.get('due_date','')), 
+            tags=r.get('tags','') if pd.notna(r.get('tags')) else ''
+        )
+        for _, r in gs.iterrows()
+    ]
+
+    # Build parent-child relationships for grouping
+    children_by_parent = {}
+    parent_by_child = {}
+    if not rels.empty:
+        for _, r in rels.iterrows():
+            parent_id = r.get('parent_id')
+            child_id = r.get('child_id')
+            if pd.notna(parent_id) and pd.notna(child_id):
+                parent_id = int(parent_id)
+                child_id = int(child_id)
+                if parent_id not in children_by_parent:
+                    children_by_parent[parent_id] = []
+                children_by_parent[parent_id].append(child_id)
+                parent_by_child[child_id] = parent_id
+
+    payload = dict(
+        goals=goals_rows,
+        relationships=dict(
+            children_by_parent=children_by_parent,
+            parent_by_child=parent_by_child
+        )
+    )
+    return render_template('gantt.html', data=payload)
+
+
 @app.get('/sankey')
 def sankey():
     # Data

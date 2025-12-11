@@ -97,6 +97,7 @@ th.filter-cell > div { padding: .5rem; }
     <tr>
       <th class="filter-cell"><div>ID</div></th>
       <th class="filter-cell"><div>Name</div></th>
+      <th class="filter-cell"><div>Start</div></th>
       <th class="filter-cell"><div>Due</div></th>
       <th class="filter-cell"><div>Description</div></th>
       <th class="filter-cell"><div>Display</div></th>
@@ -114,6 +115,7 @@ th.filter-cell > div { padding: .5rem; }
       <th class="filter-cell"></th>
       <th class="filter-cell"></th>
       <th class="filter-cell"></th>
+      <th class="filter-cell"></th>
       <th></th>
     </tr>
   </thead>
@@ -122,6 +124,7 @@ th.filter-cell > div { padding: .5rem; }
     <tr>
       <td>{{ g.id }}</td>
       <td>{{ g.name }}</td>
+      <td>{{ g.start_date_disp or '' }}</td>
       <td>{{ g.due_date_disp }}</td>
       <td>{{ g.description or '' }}</td>
       <td>{{ g.display }}</td>
@@ -164,6 +167,7 @@ th.filter-cell > div { padding: .5rem; }
     <form id="goalForm" class="kv">
       <input type="hidden" id="g_id">
       <label>Name</label><input id="g_name" required>
+      <label>Start date</label><input id="g_start" type="date">
       <label>Due date</label><input id="g_due" type="date">
       <label>Description</label><textarea id="g_desc"></textarea>
       <label>Display</label><select id="g_display">
@@ -225,6 +229,7 @@ th.filter-cell > div { padding: .5rem; }
       </div>
       <div id="addParentCreateSection" style="display: none;">
         <label>Name</label><input id="addParentName" type="text" placeholder="Goal name">
+        <label>Start date</label><input id="addParentStart" type="date">
         <label>Due date</label><input id="addParentDue" type="date">
         <label>Description</label><textarea id="addParentDesc" placeholder="Optional description"></textarea>
         <label>Display</label><select id="addParentDisplay">
@@ -265,6 +270,7 @@ th.filter-cell > div { padding: .5rem; }
       </div>
       <div id="addChildCreateSection" style="display: none;">
         <label>Name</label><input id="addChildName" type="text" placeholder="Goal name">
+        <label>Start date</label><input id="addChildStart" type="date">
         <label>Due date</label><input id="addChildDue" type="date">
         <label>Description</label><textarea id="addChildDesc" placeholder="Optional description"></textarea>
         <label>Display</label><select id="addChildDisplay">
@@ -310,6 +316,7 @@ const gM = document.getElementById('goalModal');
 const gF = document.getElementById('goalForm');
 const gId = document.getElementById('g_id');
 const gName = document.getElementById('g_name');
+const gStart = document.getElementById('g_start');
 const gDue = document.getElementById('g_due');
 const gDesc = document.getElementById('g_desc');
 const gDisplay = document.getElementById('g_display');
@@ -322,6 +329,7 @@ const gAdd = document.getElementById('g_add');
 gAdd.addEventListener('click', ()=>{
   gId.value = '';
   gName.value = '';
+  gStart.value = '';
   gDue.value = '';
   gDesc.value = '';
   gDisplay.value = '1'; // Default to Yes
@@ -339,6 +347,7 @@ function gOpen(id){
   gSaveBtn.textContent = 'Save';
   gId.value = id;
   gName.value = row.name||'';
+  gStart.value = (row.start_date_disp || '').toString();
   gDue.value = (row.due_date_disp || '').toString();
   gDesc.value = (!row.description || String(row.description).toLowerCase()==='nan')?'':row.description;
   gDisplay.value = (row.display_value !== undefined && row.display_value !== null) ? String(row.display_value) : '1';
@@ -356,6 +365,7 @@ gF.addEventListener('submit', async (e)=>{
   const id = gId.value.trim();
   const fd = new FormData();
   fd.append('name', gName.value.trim());
+  fd.append('start_date', gStart.value);
   fd.append('due_date', gDue.value);
   fd.append('description', gDesc.value.trim());
   fd.append('display', gDisplay.value || '1');
@@ -475,6 +485,7 @@ gF.addEventListener('submit', async (e)=>{
   const modeSelect = document.getElementById('addParentModeSelect');
   const modeCreate = document.getElementById('addParentModeCreate');
   const nameInput = document.getElementById('addParentName');
+  const startInput = document.getElementById('addParentStart');
   const dueInput = document.getElementById('addParentDue');
   const descInput = document.getElementById('addParentDesc');
   const displayInput = document.getElementById('addParentDisplay');
@@ -527,6 +538,7 @@ gF.addEventListener('submit', async (e)=>{
     
     // Reset create form
     nameInput.value = '';
+    startInput.value = '';
     dueInput.value = '';
     descInput.value = '';
     displayInput.value = '1';
@@ -578,6 +590,7 @@ gF.addEventListener('submit', async (e)=>{
         console.log('Creating goal with name:', nameInput.value.trim());
         const fd = new FormData();
         fd.append('name', nameInput.value.trim());
+        fd.append('start_date', startInput.value);
         fd.append('due_date', dueInput.value);
         fd.append('description', descInput.value.trim());
         fd.append('display', displayInput.value || '1');
@@ -652,6 +665,7 @@ gF.addEventListener('submit', async (e)=>{
   const modeSelect = document.getElementById('addChildModeSelect');
   const modeCreate = document.getElementById('addChildModeCreate');
   const nameInput = document.getElementById('addChildName');
+  const startInput = document.getElementById('addChildStart');
   const dueInput = document.getElementById('addChildDue');
   const descInput = document.getElementById('addChildDesc');
   const displayInput = document.getElementById('addChildDisplay');
@@ -671,6 +685,7 @@ gF.addEventListener('submit', async (e)=>{
       nameInput.removeAttribute('required');
       // Clear create form values when switching to select mode
       nameInput.value = '';
+      startInput.value = '';
       dueInput.value = '';
       descInput.value = '';
       displayInput.value = '1';
@@ -720,6 +735,7 @@ gF.addEventListener('submit', async (e)=>{
     
     // Reset create form
     nameInput.value = '';
+    startInput.value = '';
     dueInput.value = '';
     descInput.value = '';
     displayInput.value = '1';
@@ -782,6 +798,7 @@ gF.addEventListener('submit', async (e)=>{
         console.log('Creating goal with name:', nameInput.value.trim());
         const fd = new FormData();
         fd.append('name', nameInput.value.trim());
+        fd.append('start_date', startInput.value);
         fd.append('due_date', dueInput.value);
         fd.append('description', descInput.value.trim());
         fd.append('display', displayInput.value || '1');

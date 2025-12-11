@@ -62,6 +62,8 @@
     <!-- Goal Details -->
     <div style="background:#f5f5f5; border-radius:6px; padding:.75rem; margin-bottom:1rem;">
       <div style="display:grid; grid-template-columns: 80px 1fr; gap:.25rem .5rem; font-size:.9em;">
+        <span style="color:#666;">Start:</span>
+        <span id="goalStartDisplay">-</span>
         <span style="color:#666;">Due:</span>
         <span id="goalDueDisplay">-</span>
         <span style="color:#666;">Parents:</span>
@@ -94,6 +96,9 @@
     
     <label style="font-weight:500; display:block; margin-bottom:.25rem;">Goal Name *</label>
     <input type="text" id="newGoalName" placeholder="Enter goal name..." style="width:100%; padding:.5rem; margin-bottom:.75rem;">
+    
+    <label style="font-weight:500; display:block; margin-bottom:.25rem;">Start Date</label>
+    <input type="date" id="newGoalStart" style="width:100%; padding:.5rem; margin-bottom:.75rem;">
     
     <label style="font-weight:500; display:block; margin-bottom:.25rem;">Due Date</label>
     <input type="date" id="newGoalDue" style="width:100%; padding:.5rem; margin-bottom:.75rem;">
@@ -693,6 +698,7 @@ render();
 const linkModal = document.getElementById('linkModal');
 const linkTitle = document.getElementById('linkTitle');
 const linkCancel = document.getElementById('link_cancel');
+const goalStartDisplay = document.getElementById('goalStartDisplay');
 const goalDueDisplay = document.getElementById('goalDueDisplay');
 const goalParentsDisplay = document.getElementById('goalParentsDisplay');
 const goalChildrenDisplay = document.getElementById('goalChildrenDisplay');
@@ -707,6 +713,7 @@ const createGoalModal = document.getElementById('createGoalModal');
 const createGoalTitle = document.getElementById('createGoalTitle');
 const createGoalSubtitle = document.getElementById('createGoalSubtitle');
 const newGoalName = document.getElementById('newGoalName');
+const newGoalStart = document.getElementById('newGoalStart');
 const newGoalDue = document.getElementById('newGoalDue');
 const newGoalDesc = document.getElementById('newGoalDesc');
 const createGoalBtn = document.getElementById('createGoalBtn');
@@ -749,6 +756,7 @@ function openLinkModal(goalId) {
   
   // Set goal details
   linkTitle.textContent = goal.name;
+  goalStartDisplay.textContent = goal.start || '-';
   goalDueDisplay.textContent = goal.due || '-';
   
   const rels = getGoalRelationships(goalId);
@@ -782,6 +790,7 @@ function openCreateGoalModal(mode) {
   }
   
   newGoalName.value = '';
+  newGoalStart.value = '';
   newGoalDue.value = '';
   newGoalDesc.value = '';
   createGoalModal.classList.remove('hidden');
@@ -801,6 +810,7 @@ async function createAndLinkGoal() {
     return;
   }
   
+  const start = newGoalStart.value;
   const due = newGoalDue.value;
   const desc = newGoalDesc.value.trim();
   
@@ -815,7 +825,7 @@ async function createAndLinkGoal() {
     const resp = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, due_date: due, description: desc })
+      body: JSON.stringify({ name, start_date: start, due_date: due, description: desc })
     });
     const data = await resp.json();
     

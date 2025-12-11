@@ -1,0 +1,444 @@
+{% extends "base.html" %}
+{% block content %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.css">
+
+<h2>Gantt Chart</h2>
+<p class="small">
+  Timeline view of goals showing start and due dates with dependencies.
+</p>
+
+<div style="display: flex; width: 100%; height: 600px; border: 1px solid var(--b); border-radius: 8px; background: #fff; overflow: hidden;">
+  <div id="gantt-names-column" style="width: 250px; min-width: 250px; background: #fafafa; border-right: 1px solid var(--b); overflow-y: auto; overflow-x: hidden; flex-shrink: 0;"></div>
+  <div id="gantt-container" style="flex: 1; overflow: auto; position: relative;"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.min.js"></script>
+<script>
+const DATA = {{ data|tojson }};
+const GOALS = DATA.goals || [];
+const RELS = DATA.relationships || {};
+const childrenByParent = RELS.children_by_parent || {};
+const parentByChild = RELS.parent_by_child || {};
+
+// Debug: log data to console
+console.log('GOALS data:', GOALS);
+console.log('Tasks count:', GOALS.length);
+
+// Transform goals to Frappe Gantt format
+function transformToGanttTasks() {
+  const tasks = [];
+  const goalIdMap = new Map(); // Map goal IDs to task IDs
+  
+  // First pass: create all task IDs
+  GOALS.forEach(goal => {
+    const taskId = `task-${goal.id}`;
+    goalIdMap.set(goal.id, taskId);
+  });
+  
+  // Second pass: create tasks with dependencies
+  GOALS.forEach(goal => {
+    const start = goal.start || '';
+    const due = goal.due || '';
+    
+    console.log(`Processing goal ${goal.id}: start="${start}", due="${due}", name="${goal.name}"`);
+    
+    let taskStart = start;
+    let taskEnd = due;
+    
+    // Handle milestones: if only due date, set start = end = due date
+    if (!start && due) {
+      taskStart = due;
+      taskEnd = due;
+    }
+    
+    // If no dates at all, use today as default (show all goals)
+    if (!taskStart && !taskEnd) {
+      const today = new Date().toISOString().split('T')[0];
+      taskStart = today;
+      taskEnd = today;
+    } else {
+      // If still missing dates, use defaults
+      if (!taskStart) taskStart = taskEnd || new Date().toISOString().split('T')[0];
+      if (!taskEnd) taskEnd = taskStart || new Date().toISOString().split('T')[0];
+    }
+    
+    // Ensure end is not before start
+    if (taskEnd < taskStart) {
+      taskEnd = taskStart;
+    }
+    
+    const taskId = goalIdMap.get(goal.id);
+    
+    // Build dependencies: child depends on parent
+    const dependencies = [];
+    const parentId = parentByChild[goal.id];
+    if (parentId) {
+      const parentTaskId = goalIdMap.get(parentId);
+      if (parentTaskId) {
+        dependencies.push(parentTaskId);
+      }
+    }
+    
+    const task = {
+      id: taskId,
+      name: goal.name,
+      start: taskStart,
+      end: taskEnd,
+      progress: 0,
+      custom_class: parentId ? 'child-task' : 'root-task',
+      goalId: goal.id // Store original goal ID for click handling
+    };
+    
+    if (dependencies.length > 0) {
+      task.dependencies = dependencies.join(',');
+    }
+    
+    tasks.push(task);
+  });
+  
+  return tasks;
+}
+
+const tasks = transformToGanttTasks();
+
+console.log('Transformed tasks:', tasks);
+console.log('Tasks count:', tasks.length);
+
+// Calculate date range to determine appropriate initial view
+function calculateDateRange(tasks) {
+  if (tasks.length === 0) return null;
+  
+  let minDate = null;
+  let maxDate = null;
+  
+  tasks.forEach(task => {
+    if (task.start) {
+      const startDate = new Date(task.start);
+      if (!minDate || startDate < minDate) minDate = startDate;
+    }
+    if (task.end) {
+      const endDate = new Date(task.end);
+      if (!maxDate || endDate > maxDate) maxDate = endDate;
+    }
+  });
+  
+  if (!minDate || !maxDate) return null;
+  
+  const diffTime = Math.abs(maxDate - minDate);
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  const diffMonths = diffDays / 30;
+  const diffYears = diffDays / 365;
+  
+  return { minDate, maxDate, diffDays, diffMonths, diffYears };
+}
+
+const dateRange = calculateDateRange(tasks);
+
+// Determine initial view mode based on date range
+function getInitialViewMode(dateRange) {
+  if (!dateRange) return 'Month';
+  
+  // If span is more than 2 years, start with Year view
+  if (dateRange.diffYears > 2) {
+    return 'Year';
+  }
+  // If span is more than 6 months, start with Month view
+  else if (dateRange.diffMonths > 6) {
+    return 'Month';
+  }
+  // If span is more than 3 months, start with Week view
+  else if (dateRange.diffMonths > 3) {
+    return 'Week';
+  }
+  // Otherwise start with Day view
+  else {
+    return 'Day';
+  }
+}
+
+const initialViewMode = getInitialViewMode(dateRange);
+
+console.log('Date range:', dateRange);
+console.log('Initial view mode:', initialViewMode);
+
+// Check if Gantt library loaded
+if (typeof Gantt === 'undefined') {
+  console.error('Frappe Gantt library failed to load');
+  document.getElementById('gantt-container').innerHTML = '<p style="padding: 2rem; color: #d32f2f;">Error: Gantt chart library failed to load. Please check your internet connection and refresh the page.</p>';
+} else if (tasks.length === 0) {
+  document.getElementById('gantt-container').innerHTML = '<p style="padding: 2rem; color: #666;">No goals found. Please add goals with start or due dates.</p>';
+} else {
+  // Initialize Frappe Gantt
+  try {
+    const gantt = new Gantt('#gantt-container', tasks, {
+  header_height: 50,
+  column_width: 30,
+  step: 24,
+  view_modes: ['Quarter Day', 'Half Day', 'Day', 'Week', 'Month', 'Year'],
+  view_mode: initialViewMode,
+  bar_height: 30,
+  bar_corner_radius: 3,
+  arrow_curve: 5,
+  padding: 18,
+  date_format: 'YYYY-MM-DD',
+  language: 'en',
+  popup_trigger: 'click',
+  on_click: function(task) {
+    // Navigate to goal details
+    if (task.goalId) {
+      window.location.href = `/goals#goal-${task.goalId}`;
+    }
+  },
+  on_date_change: function(task, start, end) {
+    // Optional: handle date changes if you want to make it editable
+    console.log('Date changed:', task, start, end);
+  },
+  on_progress_change: function(task, progress) {
+    // Optional: handle progress changes
+    console.log('Progress changed:', task, progress);
+  },
+  on_view_change: function(mode) {
+    // Optional: handle view mode changes
+    console.log('View changed:', mode);
+    // Update names column when view changes
+    setTimeout(() => updateNamesColumn(), 100);
+  }
+  });
+  
+  // Function to create and update the left column with task names
+  let scrollSyncInitialized = false;
+  function updateNamesColumn() {
+    const namesColumn = document.getElementById('gantt-names-column');
+    if (!namesColumn) return;
+    
+    // Get the header height and bar height from the Gantt
+    const headerHeight = 50;
+    const barHeight = 30;
+    const padding = 18;
+    const rowHeight = barHeight + padding;
+    
+    // Create header for names column
+    let html = `<div style="height: ${headerHeight}px; padding: 0.5rem 1rem; border-bottom: 1px solid var(--b); background: #f4f4f4; font-weight: 600; display: flex; align-items: center; position: sticky; top: 0; z-index: 10;">Goal Name</div>`;
+    
+    // Create a row for each task
+    tasks.forEach((task, index) => {
+      const isChild = task.custom_class === 'child-task';
+      const indent = isChild ? '1.5rem' : '0';
+      const fontWeight = isChild ? '400' : '500';
+      const color = isChild ? '#666' : '#222';
+      
+      html += `
+        <div class="gantt-name-row" data-task-id="${task.id}" style="
+          height: ${rowHeight}px;
+          padding: 0.5rem 1rem;
+          border-bottom: 1px solid #e0e0e0;
+          display: flex;
+          align-items: center;
+          cursor: pointer;
+          transition: background-color 0.2s;
+          padding-left: calc(1rem + ${indent});
+        " onmouseover="this.style.backgroundColor='#f0f0f0'" onmouseout="this.style.backgroundColor='transparent'" onclick="window.location.href='/goals#goal-${task.goalId || ''}'">
+          <span style="font-size: 13px; font-weight: ${fontWeight}; color: ${color}; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%;">${escapeHtml(task.name)}</span>
+        </div>
+      `;
+    });
+    
+    namesColumn.innerHTML = html;
+    
+    // Synchronize scrolling between names column and Gantt chart (only set up once)
+    if (!scrollSyncInitialized) {
+      const ganttContainer = document.getElementById('gantt-container');
+      if (ganttContainer) {
+        let syncing = false;
+        // Sync names column scroll with Gantt scroll
+        ganttContainer.addEventListener('scroll', function() {
+          if (!syncing) {
+            syncing = true;
+            namesColumn.scrollTop = ganttContainer.scrollTop;
+            syncing = false;
+          }
+        });
+        
+        // Sync Gantt scroll with names column scroll
+        namesColumn.addEventListener('scroll', function() {
+          if (!syncing) {
+            syncing = true;
+            ganttContainer.scrollTop = namesColumn.scrollTop;
+            syncing = false;
+          }
+        });
+        scrollSyncInitialized = true;
+      }
+    }
+  }
+  
+  // Helper function to escape HTML
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+  
+  // Initial update of names column
+  setTimeout(() => updateNamesColumn(), 100);
+  
+  // Custom styling for root vs child tasks
+const style = document.createElement('style');
+style.textContent = `
+  .gantt-container .bar-wrapper .bar.root-task {
+    fill: #1976d2;
+  }
+  .gantt-container .bar-wrapper .bar.child-task {
+    fill: #1a7;
+  }
+  /* Milestone styling - ensure it's visible */
+  .gantt-container .bar-wrapper .bar.milestone {
+    fill: #ff9800 !important;
+    stroke: #ff9800 !important;
+    stroke-width: 1 !important;
+    transform-origin: center center !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    display: block !important;
+  }
+  .gantt-container .bar-wrapper .bar.milestone:hover {
+    fill: #f57c00 !important;
+    stroke: #f57c00 !important;
+  }
+  /* Ensure milestone wrapper is visible */
+  .gantt-container .bar-wrapper:has(.milestone) {
+    overflow: visible !important;
+  }
+  .gantt-container .bar-wrapper .bar:hover {
+    opacity: 0.8;
+    cursor: pointer;
+  }
+  /* Names column styling */
+  #gantt-names-column {
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, sans-serif;
+  }
+  #gantt-names-column .gantt-name-row:hover {
+    background-color: #f0f0f0 !important;
+  }
+  #gantt-names-column .gantt-name-row:active {
+    background-color: #e0e0e0 !important;
+  }
+`;
+document.head.appendChild(style);
+
+// Update bar classes and styling after render
+function styleGanttBars() {
+  let milestoneCount = 0;
+  
+  tasks.forEach(task => {
+    // Check if this is a milestone (start date equals end date)
+    const isMilestone = task.start === task.end;
+    
+    if (isMilestone) {
+      milestoneCount++;
+      console.log('Found milestone:', task.name, 'start:', task.start, 'end:', task.end);
+    }
+    
+    const barWrapper = document.querySelector(`[data-id="${task.id}"]`);
+    if (barWrapper) {
+      const barElement = barWrapper.querySelector('.bar');
+      if (barElement) {
+        if (isMilestone) {
+          // Milestone - make it a diamond shape (larger for visibility)
+          barElement.classList.add('milestone');
+          const milestoneSize = 16; // Increased size for better visibility
+          
+          // Get wrapper dimensions
+          const wrapperHeight = parseFloat(barWrapper.getAttribute('height')) || 30;
+          const wrapperWidth = parseFloat(barWrapper.getAttribute('width')) || 0;
+          let wrapperX = parseFloat(barWrapper.getAttribute('x')) || 0;
+          const wrapperY = parseFloat(barWrapper.getAttribute('y')) || 0;
+          
+          // Get the bar element's actual x position in the SVG (this is where Frappe Gantt positioned it)
+          const barX = parseFloat(barElement.getAttribute('x')) || 0;
+          const barY = parseFloat(barElement.getAttribute('y')) || 0;
+          
+          // Log dimensions for debugging
+          console.log('Milestone dimensions:', task.name, {
+            wrapperX, wrapperY, wrapperWidth, wrapperHeight,
+            barX, barY,
+            barWidth: barElement.getAttribute('width'),
+            barHeight: barElement.getAttribute('height')
+          });
+          
+          // Center the diamond vertically in the wrapper
+          const centerY = Math.max(0, (wrapperHeight - milestoneSize) / 2);
+          
+          // The barX is the actual position where Frappe Gantt placed the milestone date
+          // We want to center the diamond on this position
+          // So we'll position the wrapper so its center aligns with barX
+          const expandedWidth = milestoneSize;
+          const expandedX = barX - (milestoneSize / 2);
+          
+          // Update wrapper to be wide enough and centered on the date
+          barWrapper.setAttribute('width', expandedWidth.toString());
+          barWrapper.setAttribute('x', expandedX.toString());
+          
+          // Position diamond at x=0 relative to wrapper (which is now centered on barX)
+          const centerX = 0;
+          
+          // Set bar attributes to create a square diamond
+          barElement.setAttribute('x', centerX.toString());
+          barElement.setAttribute('y', centerY.toString());
+          barElement.setAttribute('width', milestoneSize.toString());
+          barElement.setAttribute('height', milestoneSize.toString());
+          barElement.setAttribute('rx', '0');
+          barElement.setAttribute('ry', '0');
+          
+          // Apply rotation transform to make diamond
+          barElement.style.transform = 'rotate(45deg)';
+          barElement.style.transformOrigin = 'center center';
+          
+          // Ensure fill color is set (use both attribute and style)
+          barElement.setAttribute('fill', '#ff9800');
+          barElement.setAttribute('stroke', '#ff9800');
+          barElement.setAttribute('stroke-width', '1');
+          barElement.style.fill = '#ff9800';
+          barElement.style.stroke = '#ff9800';
+          
+          // Make sure the element is visible
+          barElement.style.visibility = 'visible';
+          barElement.style.display = 'block';
+          barElement.style.opacity = '1';
+          
+          console.log('Milestone styled:', task.name, 'at date:', task.start, 'final x:', barElement.getAttribute('x'), 'y:', barElement.getAttribute('y'));
+        } else {
+          barElement.classList.add(task.custom_class || '');
+        }
+      } else if (isMilestone) {
+        console.warn('Milestone bar element not found for:', task.name);
+      }
+    } else if (isMilestone) {
+      console.warn('Milestone wrapper not found for:', task.name, 'task.id:', task.id);
+    }
+  });
+  
+  console.log('Total milestones found:', milestoneCount);
+}
+
+// Try multiple times to ensure Gantt is fully rendered
+setTimeout(() => {
+  styleGanttBars();
+  
+  // Update names column after Gantt renders
+  if (typeof updateNamesColumn === 'function') {
+    updateNamesColumn();
+  }
+}, 300);
+
+// Also try after a longer delay in case Gantt takes longer to render
+setTimeout(() => {
+  styleGanttBars();
+}, 1000);
+  } catch (error) {
+    console.error('Error initializing Gantt chart:', error);
+    document.getElementById('gantt-container').innerHTML = '<p style="padding: 2rem; color: #d32f2f;">Error initializing Gantt chart: ' + error.message + '</p>';
+  }
+}
+</script>
+{% endblock %}
